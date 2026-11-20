@@ -96,6 +96,8 @@ nav svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stro
 ul.chg{padding-left:18px;margin:10px 0}
 ul.chg li{margin:4px 0}
 .stall{background:var(--card2);border-radius:14px;padding:12px;margin-top:12px}
+.lc{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;transition:transform .18s ease;position:relative}
+.lc.dragging{transition:none;z-index:3;box-shadow:0 12px 30px #000c;background:#23252a;outline:2px solid var(--acc)}
 .stall .btn{margin-top:8px;padding:12px;font-size:15px}
 </style>
 </head>
@@ -124,7 +126,7 @@ ul.chg li{margin:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.0';
+const VERSION = '1.1';
 const KEY = 'plates.v1';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -140,7 +142,7 @@ const shortDate = s => parseD(s).toLocaleDateString(undefined, {month: 'short', 
 /* ---------- State ---------- */
 function defaults() {
   return {
-    v: 1,
+    v: 2,
     next: 'A',
     lifts: {
       ohp:   {name: 'Overhead Press', type: 'bb', weight: 45, inc: 2.5, fails: 0, sets: 3, reps: 5},
@@ -150,7 +152,7 @@ function defaults() {
       row:   {name: 'Dumbbell Row',   type: 'range', weight: 5, inc: 2.5, sets: 3, lo: 8, hi: 12, db: true, perArm: true},
       dead:  {name: 'Deadlift',       type: 'bb', weight: 65, inc: 5, fails: 0, sets: 1, reps: 5}
     },
-    workouts: {A: ['ohp', 'pull', 'squat'], B: ['bench', 'row', 'dead']},
+    workouts: {A: ['ohp', 'squat', 'pull'], B: ['bench', 'row', 'dead']},
     settings: {
       bar: 45,
       plates: [45, 35, 25, 10, 5, 2.5, 1.25],
@@ -176,7 +178,18 @@ function merge(d, s) {
   return out;
 }
 function load() {
-  try { const raw = localStorage.getItem(KEY); if (raw) return merge(defaults(), JSON.parse(raw)); } catch (e) {}
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) {
+      const s = merge(defaults(), JSON.parse(raw));
+      if (!(s.v >= 2)) {
+        // v1.1: pulldowns move to the end of Workout A
+        if (s.workouts.A.join() === 'ohp,pull,squat') s.workouts.A = ['ohp', 'squat', 'pull'];
+        s.v = 2;
+      }
+      return s;
+    }
+  } catch (e) {}
   return defaults();
 }
 let S = load();
@@ -309,7 +322,7 @@ function render() {
 
 function liftCard(it, i, active) {
   const L = S.lifts[it.lift];
-  let h = `<div class="card"><div class="lift-head"><div><div class="lift-name">${esc(L.name)}</div><div class="scheme">${scheme(L)}</div></div>
+  let h = `<div class="card lc" data-li="${i}"><div class="lift-head"><div><div class="lift-name">${esc(L.name)}</div><div class="scheme">${scheme(L)}</div></div>
     <button class="wbtn" data-act="editW" data-lift="${it.lift}">${fmtW(it.weight)} <small>lb</small></button></div>`;
   const pt = plateText(L, it.weight);
   if (pt) h += `<div class="plates">${pt}</div>`;
@@ -337,6 +350,7 @@ function vToday() {
   h += `<div class="row between" style="margin:6px 4px 0"><div><div class="kicker">${c ? 'In progress' : 'Next up'}</div><div class="big">Workout ${wk}</div></div>
     ${c ? '' : `<button class="ghost" data-act="swapAB">Switch to ${wk === 'A' ? 'B' : 'A'}</button>`}</div>`;
   const items = c ? c.items : planItems(wk);
+  h += `<div class="small dim" style="margin:2px 4px 0">Press and hold a lift to reorder.</div>`;
   items.forEach((it, i) => { h += liftCard(it, i, !!c); });
   if (c) {
     h += `<div class="card"><div class="kicker" style="margin-bottom:6px">Session note</div>
@@ -673,7 +687,76 @@ const ACT = {
   tSkip() { stopTimer(); }
 };
 
+/* ---------- Press and hold to reorder ---------- */
+let drag = null, noClickUntil = 0;
+function beginDrag() {
+  const cards = [...document.querySelectorAll('.lc')];
+  const from = cards.indexOf(drag.card);
+  if (from < 0 || cards.length < 2) { drag = null; return; }
+  drag.active = true; drag.cards = cards; drag.from = drag.to = from;
+  drag.rects = cards.map(c => c.getBoundingClientRect());
+  drag.gap = cards.length > 1 ? drag.rects[1].top - drag.rects[0].bottom : 10;
+  drag.card.classList.add('dragging');
+  noClickUntil = Date.now() + 100000;
+}
+function moveDrag(y) {
+  const {cards, rects, from, gap} = drag;
+  const dy = y - drag.startY;
+  drag.card.style.transform = `translateY(${dy}px) scale(1.02)`;
+  const center = rects[from].top + rects[from].height / 2 + dy;
+  let to = 0;
+  cards.forEach((c, i) => { if (i !== from && center > rects[i].top + rects[i].height / 2) to++; });
+  drag.to = to;
+  const shift = rects[from].height + gap;
+  cards.forEach((c, i) => {
+    if (i === from) return;
+    let s = 0;
+    if (from < to && i > from && i <= to) s = -shift;
+    if (to < from && i >= to && i < from) s = shift;
+    c.style.transform = s ? `translateY(${s}px)` : '';
+  });
+}
+function endDrag() {
+  const {from, to} = drag;
+  noClickUntil = Date.now() + 400;
+  if (from !== to) {
+    const wk = S.current ? S.current.workout : S.next;
+    const mv = arr => { const [x] = arr.splice(from, 1); arr.splice(to, 0, x); };
+    mv(S.workouts[wk]);
+    if (S.current) mv(S.current.items);
+    save();
+  }
+  render();
+}
+document.addEventListener('touchstart', e => {
+  const card = e.target.closest('.lc');
+  if (!card || e.touches.length > 1) return;
+  const t = e.touches[0];
+  drag = {card, startY: t.clientY, startX: t.clientX, active: false};
+  drag.timer = setTimeout(() => { if (drag) beginDrag(); }, 450);
+}, {passive: true});
+document.addEventListener('touchmove', e => {
+  if (!drag) return;
+  const t = e.touches[0];
+  if (!drag.active) {
+    if (Math.abs(t.clientY - drag.startY) > 8 || Math.abs(t.clientX - drag.startX) > 8) { clearTimeout(drag.timer); drag = null; }
+    return;
+  }
+  e.preventDefault();
+  moveDrag(t.clientY);
+}, {passive: false});
+const touchDone = e => {
+  if (!drag) return;
+  clearTimeout(drag.timer);
+  if (drag.active) { if (e.cancelable) e.preventDefault(); endDrag(); }
+  drag = null;
+};
+document.addEventListener('touchend', touchDone, {passive: false});
+document.addEventListener('touchcancel', touchDone, {passive: false});
+document.addEventListener('contextmenu', e => { if (e.target.closest('.lc')) e.preventDefault(); });
+
 document.addEventListener('click', e => {
+  if (Date.now() < noClickUntil) { e.preventDefault(); e.stopPropagation(); return; }
   const tb = e.target.closest('nav button');
   if (tb) { tab = tb.dataset.tab; if (tab !== 'history') selDay = null; render(); window.scrollTo(0, 0); return; }
   const el = e.target.closest('[data-act]');

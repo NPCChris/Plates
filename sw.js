@@ -1,5 +1,5 @@
 // Bump this when you upload new files so phones pick up the update.
-const CACHE = 'plates-v1';
+const CACHE = 'plates-v2';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
